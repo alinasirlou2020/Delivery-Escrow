@@ -17,6 +17,7 @@ import {MockDeliveryOracle} from "../src/MockDeliveryOracle.sol";
  *   SHIPPING_WINDOW_SECS  default: 5 days
  *   DELIVERY_WINDOW_SECS  default: 7 days
  *   DISPUTE_WINDOW_SECS   default: 2 days
+ *   RETURN_WINDOW_SECS    default: 10 days
  *
  * Example (local Anvil):
  *   forge script script/Deploy.s.sol:DeployDeliveryEscrow \
@@ -33,6 +34,7 @@ contract DeployDeliveryEscrow is Script {
         uint256 shippingWindow = vm.envOr("SHIPPING_WINDOW_SECS", uint256(5 days));
         uint256 deliveryWindow = vm.envOr("DELIVERY_WINDOW_SECS", uint256(7 days));
         uint256 disputeWindow = vm.envOr("DISPUTE_WINDOW_SECS", uint256(2 days));
+        uint256 returnWindow = vm.envOr("RETURN_WINDOW_SECS", uint256(10 days));
 
         address deployer = vm.addr(deployerKey);
 
@@ -41,7 +43,14 @@ contract DeployDeliveryEscrow is Script {
         // Deploy with the deployer as a temporary oracle so the constructor never
         // takes a zero address, then swap in the real MockDeliveryOracle contract.
         escrow = new DeliveryEscrow(
-            paymentToken, deployer, attestationSigner, arbiterAddr, shippingWindow, deliveryWindow, disputeWindow
+            paymentToken,
+            deployer,
+            attestationSigner,
+            arbiterAddr,
+            shippingWindow,
+            deliveryWindow,
+            disputeWindow,
+            returnWindow
         );
 
         oracle = new MockDeliveryOracle(address(escrow), oracleOperator);

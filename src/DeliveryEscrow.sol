@@ -52,6 +52,7 @@ contract DeliveryEscrow is ReentrancyGuard, Ownable, EIP712, IDeliveryEscrow {
     error ShippingWindowNotExpired();
     error DeliveryWindowNotExpired();
     error DisputeWindowNotExpired();
+    error ReturnWindowNotExpired();
     error DeliveryProofInvalid();
     error AttestationMismatch();
     error InvalidNonce();
@@ -84,6 +85,12 @@ contract DeliveryEscrow is ReentrancyGuard, Ownable, EIP712, IDeliveryEscrow {
     /// @notice Cooling-off period after delivery is confirmed during which the
     /// buyer may still raise a dispute before anyone can trigger `autoRelease`.
     uint256 public immutable DISPUTE_WINDOW;
+
+    /// @notice Maximum time a `Returning` order is allowed to wait for
+    /// `confirmReturnReceived` before the buyer may re-escalate it back to
+    /// `Disputed` via `reportReturnTimeout` (Section 9 follow-up: without this,
+    /// a silent oracle could leave an order stuck in `Returning` forever).
+    uint256 public immutable RETURN_WINDOW;
 
     // ============================================================
     // Mutable admin-controlled roles
@@ -123,6 +130,7 @@ contract DeliveryEscrow is ReentrancyGuard, Ownable, EIP712, IDeliveryEscrow {
         uint256 deliveryDeadline; // set once shipped
         uint256 deliveredAt; // set once delivery is confirmed
         uint256 deliveryNonce; // replay-protection counter for delivery attestations
+        uint256 returnDeadline; // set when a dispute resolves into Returning
         DeliveryMethod deliveryMethod;
         State state;
     }
@@ -202,7 +210,8 @@ contract DeliveryEscrow is ReentrancyGuard, Ownable, EIP712, IDeliveryEscrow {
         address initialArbiter,
         uint256 shippingWindow,
         uint256 deliveryWindow,
-        uint256 disputeWindow
+        uint256 disputeWindow,
+        uint256 returnWindow
     ) Ownable(msg.sender) EIP712("DeliveryEscrow", "1") {
         if (
             paymentToken == address(0) || initialDeliveryOracle == address(0) || initialAttestationSigner == address(0)
@@ -220,6 +229,7 @@ contract DeliveryEscrow is ReentrancyGuard, Ownable, EIP712, IDeliveryEscrow {
         SHIPPING_WINDOW = shippingWindow;
         DELIVERY_WINDOW = deliveryWindow;
         DISPUTE_WINDOW = disputeWindow;
+        RETURN_WINDOW = returnWindow;
     }
 
     // ============================================================
@@ -548,6 +558,21 @@ contract DeliveryEscrow is ReentrancyGuard, Ownable, EIP712, IDeliveryEscrow {
         emit OrderCancelled(orderId, "Seller failed to ship before deadline");
     }
 
+    /// @notice Lets the seller voluntarily cancel an order it has been paid for
+    /// but has not shipped yet (e.g. out of stock) — no need to wait for the
+    /// buyer to wait out the full `SHIPPING_WINDOW` and call `reportNotShipped`.
+    /// Moves straight to `Cancelled`, unlocking `refundOrder` immediately. The
+    /// buyer retains the symmetric, deadline-gated path via `reportNotShipped`;
+    /// this function only ever lets the seller give up its own claim early, it
+    /// can never be used to deny or delay a refund the buyer is owed.
+    function sellerAbortBeforeShipment(uint256 orderId) external orderExists(orderId) onlyState(orderId, State.Funded) {
+        Order storage o = orders[orderId];
+        if (msg.sender != o.seller) revert NotSeller();
+
+        o.state = State.Cancelled;
+        emit OrderCancelled(orderId, "Seller cancelled before shipment");
+    }
+
     /// @notice Pulls the refund for a cancelled (never-shipped) order. Callable by
     /// anyone — funds only ever move to the order's fixed buyer address.
     function refundOrder(uint256 orderId)
@@ -584,8 +609,9 @@ contract DeliveryEscrow is ReentrancyGuard, Ownable, EIP712, IDeliveryEscrow {
      * can never touch an unrelated order's escrowed funds.
      * @param resolution RefundBuyer pays the buyer and closes the order;
      * PaySeller pays the seller and closes the order; ApproveReturn moves the
-     * order to `Returning` without moving any funds yet, pending physical return
-     * of the goods (Section 20); Reship moves the order back to `Shipped` with a
+     * order to `Returning` and starts a `RETURN_WINDOW` countdown (see
+     * `reportReturnTimeout`) without moving any funds yet, pending physical
+     * return of the goods (Section 20); Reship moves the order back to `Shipped` with a
      * fresh delivery deadline, without moving any funds, for cases like a drone
      * failure where a second delivery attempt is the appropriate fix (Section 14).
      */
@@ -611,6 +637,7 @@ contract DeliveryEscrow is ReentrancyGuard, Ownable, EIP712, IDeliveryEscrow {
             emit EscrowReleased(orderId, o.seller, amount, false);
         } else if (resolution == DisputeResolution.ApproveReturn) {
             o.state = State.Returning;
+            o.returnDeadline = block.timestamp + RETURN_WINDOW;
             emit ReturnStarted(orderId, msg.sender);
         } else {
             // Reship: the goods themselves are not lost/damaged (e.g. a drone
@@ -660,6 +687,21 @@ contract DeliveryEscrow is ReentrancyGuard, Ownable, EIP712, IDeliveryEscrow {
         PAYMENT_TOKEN.safeTransfer(o.buyer, amount);
         emit OrderReturned(orderId);
         emit Refunded(orderId, o.buyer, amount);
+    }
+
+    /// @notice Lets the buyer re-escalate a `Returning` order whose return
+    /// shipment the delivery platform never confirmed as received within
+    /// `RETURN_WINDOW` of the arbiter's `ApproveReturn` decision. Moves back to
+    /// `Disputed` (recorded as a `PackageLost` incident) so the arbiter can
+    /// re-decide — typically `RefundBuyer` at that point — rather than leaving
+    /// the order locked in `Returning` indefinitely.
+    function reportReturnTimeout(uint256 orderId) external orderExists(orderId) onlyState(orderId, State.Returning) {
+        Order storage o = orders[orderId];
+        if (msg.sender != o.buyer) revert NotBuyer();
+        if (block.timestamp <= o.returnDeadline) revert ReturnWindowNotExpired();
+
+        _recordIncident(orderId, IncidentType.PackageLost, msg.sender, "return-deadline-expired");
+        o.state = State.Disputed;
     }
 
     // ============================================================

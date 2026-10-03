@@ -26,6 +26,7 @@ contract DeliveryEscrowTest is Test {
     uint256 internal constant SHIPPING_WINDOW = 5 days;
     uint256 internal constant DELIVERY_WINDOW = 7 days;
     uint256 internal constant DISPUTE_WINDOW = 2 days;
+    uint256 internal constant RETURN_WINDOW = 10 days;
     uint256 internal constant AMOUNT = 100 ether;
 
     function setUp() public {
@@ -36,7 +37,14 @@ contract DeliveryEscrowTest is Test {
         // deploy with the admin as a temporary oracle (constructor forbids zero
         // address and forbids oracle == arbiter), then swap in the real mock oracle
         escrow = new DeliveryEscrow(
-            address(token), admin, attestationSigner, arbiter, SHIPPING_WINDOW, DELIVERY_WINDOW, DISPUTE_WINDOW
+            address(token),
+            admin,
+            attestationSigner,
+            arbiter,
+            SHIPPING_WINDOW,
+            DELIVERY_WINDOW,
+            DISPUTE_WINDOW,
+            RETURN_WINDOW
         );
         oracleContract = new MockDeliveryOracle(address(escrow), oracleOperator);
         escrow.setDeliveryOracle(address(oracleContract));
@@ -88,7 +96,7 @@ contract DeliveryEscrowTest is Test {
         view
         returns (IDeliveryEscrow.DeliveryAttestation memory attestation, bytes memory signature)
     {
-        (,,, string memory shipmentId,,,,,,, uint256 deliveryNonce,,) = escrow.orders(orderId);
+        (,,, string memory shipmentId,,,,,,, uint256 deliveryNonce,,,) = escrow.orders(orderId);
         attestation = IDeliveryEscrow.DeliveryAttestation({
             orderId: orderId,
             shipmentIdHash: keccak256(bytes(shipmentId)),
@@ -130,33 +138,65 @@ contract DeliveryEscrowTest is Test {
     function test_constructor_rejectsZeroAddresses() public {
         vm.expectRevert(DeliveryEscrow.InvalidZeroAddress.selector);
         new DeliveryEscrow(
-            address(0), admin, attestationSigner, arbiter, SHIPPING_WINDOW, DELIVERY_WINDOW, DISPUTE_WINDOW
+            address(0),
+            admin,
+            attestationSigner,
+            arbiter,
+            SHIPPING_WINDOW,
+            DELIVERY_WINDOW,
+            DISPUTE_WINDOW,
+            RETURN_WINDOW
         );
 
         vm.expectRevert(DeliveryEscrow.InvalidZeroAddress.selector);
         new DeliveryEscrow(
-            address(token), address(0), attestationSigner, arbiter, SHIPPING_WINDOW, DELIVERY_WINDOW, DISPUTE_WINDOW
+            address(token),
+            address(0),
+            attestationSigner,
+            arbiter,
+            SHIPPING_WINDOW,
+            DELIVERY_WINDOW,
+            DISPUTE_WINDOW,
+            RETURN_WINDOW
         );
 
         vm.expectRevert(DeliveryEscrow.InvalidZeroAddress.selector);
-        new DeliveryEscrow(address(token), admin, address(0), arbiter, SHIPPING_WINDOW, DELIVERY_WINDOW, DISPUTE_WINDOW);
+        new DeliveryEscrow(
+            address(token), admin, address(0), arbiter, SHIPPING_WINDOW, DELIVERY_WINDOW, DISPUTE_WINDOW, RETURN_WINDOW
+        );
 
         vm.expectRevert(DeliveryEscrow.InvalidZeroAddress.selector);
         new DeliveryEscrow(
-            address(token), admin, attestationSigner, address(0), SHIPPING_WINDOW, DELIVERY_WINDOW, DISPUTE_WINDOW
+            address(token),
+            admin,
+            attestationSigner,
+            address(0),
+            SHIPPING_WINDOW,
+            DELIVERY_WINDOW,
+            DISPUTE_WINDOW,
+            RETURN_WINDOW
         );
     }
 
     function test_constructor_rejectsOracleEqualsArbiter() public {
         vm.expectRevert(DeliveryEscrow.BuyerSellerSame.selector);
         new DeliveryEscrow(
-            address(token), admin, attestationSigner, admin, SHIPPING_WINDOW, DELIVERY_WINDOW, DISPUTE_WINDOW
+            address(token),
+            admin,
+            attestationSigner,
+            admin,
+            SHIPPING_WINDOW,
+            DELIVERY_WINDOW,
+            DISPUTE_WINDOW,
+            RETURN_WINDOW
         );
     }
 
     function test_constructor_rejectsZeroWindows() public {
         vm.expectRevert(DeliveryEscrow.InvalidAmount.selector);
-        new DeliveryEscrow(address(token), admin, attestationSigner, arbiter, 0, DELIVERY_WINDOW, DISPUTE_WINDOW);
+        new DeliveryEscrow(
+            address(token), admin, attestationSigner, arbiter, 0, DELIVERY_WINDOW, DISPUTE_WINDOW, RETURN_WINDOW
+        );
     }
 
     // ============================================================
@@ -165,7 +205,7 @@ contract DeliveryEscrowTest is Test {
 
     function test_createOrder_success() public {
         uint256 orderId = _createOrderNoOtp();
-        (address o_buyer, address o_seller, uint256 amount,,,,,,,,,, IDeliveryEscrow.State state) =
+        (address o_buyer, address o_seller, uint256 amount,,,,,,,,,,, IDeliveryEscrow.State state) =
             escrow.orders(orderId);
         assertEq(o_buyer, buyer);
         assertEq(o_seller, seller);
@@ -276,7 +316,7 @@ contract DeliveryEscrowTest is Test {
 
         (address wrongSigner, uint256 wrongKey) = makeAddrAndKey("notTheRealSigner");
         wrongSigner; // silence unused warning in some tooling
-        (,,, string memory shipmentId,,,,,,, uint256 nonce,,) = escrow.orders(orderId);
+        (,,, string memory shipmentId,,,,,,, uint256 nonce,,,) = escrow.orders(orderId);
         IDeliveryEscrow.DeliveryAttestation memory a = IDeliveryEscrow.DeliveryAttestation({
             orderId: orderId,
             shipmentIdHash: keccak256(bytes(shipmentId)),
@@ -301,7 +341,7 @@ contract DeliveryEscrowTest is Test {
         _fund(orderId);
         _ship(orderId);
 
-        (,,, string memory shipmentId,,,,,,,,,) = escrow.orders(orderId);
+        (,,, string memory shipmentId,,,,,,,,,,) = escrow.orders(orderId);
         IDeliveryEscrow.DeliveryAttestation memory a = IDeliveryEscrow.DeliveryAttestation({
             orderId: orderId,
             shipmentIdHash: keccak256(bytes(shipmentId)),
@@ -473,6 +513,124 @@ contract DeliveryEscrowTest is Test {
 
         vm.expectRevert(DeliveryEscrow.InvalidState.selector);
         escrow.refundOrder(orderId);
+    }
+
+    // ============================================================
+    // Seller early cancellation (before shipment)
+    // ============================================================
+
+    function test_sellerAbortBeforeShipment_succeeds_andRefundsBuyer() public {
+        uint256 orderId = _createOrderNoOtp();
+        _fund(orderId);
+
+        vm.prank(seller);
+        escrow.sellerAbortBeforeShipment(orderId);
+        assertEq(uint8(_orderState(orderId)), uint8(IDeliveryEscrow.State.Cancelled));
+
+        // no need to wait out SHIPPING_WINDOW - refund is available immediately
+        uint256 buyerBalBefore = token.balanceOf(buyer);
+        escrow.refundOrder(orderId);
+        assertEq(token.balanceOf(buyer), buyerBalBefore + AMOUNT);
+        assertEq(uint8(_orderState(orderId)), uint8(IDeliveryEscrow.State.Refunded));
+    }
+
+    function test_sellerAbortBeforeShipment_revertsForNonSeller() public {
+        uint256 orderId = _createOrderNoOtp();
+        _fund(orderId);
+        vm.prank(buyer);
+        vm.expectRevert(DeliveryEscrow.NotSeller.selector);
+        escrow.sellerAbortBeforeShipment(orderId);
+    }
+
+    function test_sellerAbortBeforeShipment_revertsAfterShipped() public {
+        uint256 orderId = _createOrderNoOtp();
+        _fund(orderId);
+        _ship(orderId);
+        vm.prank(seller);
+        vm.expectRevert(DeliveryEscrow.InvalidState.selector);
+        escrow.sellerAbortBeforeShipment(orderId);
+    }
+
+    function test_sellerAbortBeforeShipment_revertsBeforeFunding() public {
+        uint256 orderId = _createOrderNoOtp();
+        vm.prank(seller);
+        vm.expectRevert(DeliveryEscrow.InvalidState.selector);
+        escrow.sellerAbortBeforeShipment(orderId);
+    }
+
+    // ============================================================
+    // Return timeout (Section 9 follow-up: silent oracle during Returning)
+    // ============================================================
+
+    function test_reportReturnTimeout_succeeds_reescalatesToDisputed() public {
+        uint256 orderId = _fullHappyPathToDelivered();
+        vm.prank(buyer);
+        escrow.raiseDispute(orderId, IDeliveryEscrow.IncidentType.WrongPackage, "wrong item");
+        vm.prank(arbiter);
+        escrow.resolveDispute(orderId, IDeliveryEscrow.DisputeResolution.ApproveReturn);
+        assertEq(uint8(_orderState(orderId)), uint8(IDeliveryEscrow.State.Returning));
+
+        vm.warp(block.timestamp + RETURN_WINDOW + 1);
+        vm.prank(buyer);
+        escrow.reportReturnTimeout(orderId);
+
+        assertEq(uint8(_orderState(orderId)), uint8(IDeliveryEscrow.State.Disputed));
+        assertEq(escrow.incidentCount(orderId), 2); // original WrongPackage + the timeout incident
+
+        // arbiter can now re-decide, e.g. refund the buyer since the return never showed up
+        uint256 buyerBalBefore = token.balanceOf(buyer);
+        vm.prank(arbiter);
+        escrow.resolveDispute(orderId, IDeliveryEscrow.DisputeResolution.RefundBuyer);
+        assertEq(token.balanceOf(buyer), buyerBalBefore + AMOUNT);
+    }
+
+    function test_reportReturnTimeout_revertsBeforeDeadline() public {
+        uint256 orderId = _fullHappyPathToDelivered();
+        vm.prank(buyer);
+        escrow.raiseDispute(orderId, IDeliveryEscrow.IncidentType.WrongPackage, "wrong item");
+        vm.prank(arbiter);
+        escrow.resolveDispute(orderId, IDeliveryEscrow.DisputeResolution.ApproveReturn);
+
+        vm.prank(buyer);
+        vm.expectRevert(DeliveryEscrow.ReturnWindowNotExpired.selector);
+        escrow.reportReturnTimeout(orderId);
+    }
+
+    function test_reportReturnTimeout_revertsForNonBuyer() public {
+        uint256 orderId = _fullHappyPathToDelivered();
+        vm.prank(buyer);
+        escrow.raiseDispute(orderId, IDeliveryEscrow.IncidentType.WrongPackage, "wrong item");
+        vm.prank(arbiter);
+        escrow.resolveDispute(orderId, IDeliveryEscrow.DisputeResolution.ApproveReturn);
+        vm.warp(block.timestamp + RETURN_WINDOW + 1);
+
+        vm.prank(stranger);
+        vm.expectRevert(DeliveryEscrow.NotBuyer.selector);
+        escrow.reportReturnTimeout(orderId);
+    }
+
+    function test_reportReturnTimeout_revertsIfNotReturning() public {
+        uint256 orderId = _fullHappyPathToDelivered();
+        vm.prank(buyer);
+        vm.expectRevert(DeliveryEscrow.InvalidState.selector);
+        escrow.reportReturnTimeout(orderId);
+    }
+
+    function test_confirmReturnReceived_stillWorksAfterDeadline_ifOracleIsJustLate() public {
+        // the deadline only unlocks the buyer's escalation path - it doesn't
+        // block a late-but-genuine return confirmation if no one has escalated yet.
+        uint256 orderId = _fullHappyPathToDelivered();
+        vm.prank(buyer);
+        escrow.raiseDispute(orderId, IDeliveryEscrow.IncidentType.WrongPackage, "wrong item");
+        vm.prank(arbiter);
+        escrow.resolveDispute(orderId, IDeliveryEscrow.DisputeResolution.ApproveReturn);
+        vm.warp(block.timestamp + RETURN_WINDOW + 1);
+
+        uint256 buyerBalBefore = token.balanceOf(buyer);
+        vm.prank(oracleOperator);
+        oracleContract.confirmReturnReceived(orderId);
+        assertEq(token.balanceOf(buyer), buyerBalBefore + AMOUNT);
+        assertEq(uint8(_orderState(orderId)), uint8(IDeliveryEscrow.State.Refunded));
     }
 
     // ============================================================
@@ -753,7 +911,14 @@ contract DeliveryEscrowTest is Test {
         ReentrantERC20 evilToken = new ReentrantERC20();
         vm.prank(admin);
         DeliveryEscrow evilEscrow = new DeliveryEscrow(
-            address(evilToken), admin, attestationSigner, arbiter, SHIPPING_WINDOW, DELIVERY_WINDOW, DISPUTE_WINDOW
+            address(evilToken),
+            admin,
+            attestationSigner,
+            arbiter,
+            SHIPPING_WINDOW,
+            DELIVERY_WINDOW,
+            DISPUTE_WINDOW,
+            RETURN_WINDOW
         );
         vm.prank(admin);
         MockDeliveryOracle evilOracle = new MockDeliveryOracle(address(evilEscrow), oracleOperator);
