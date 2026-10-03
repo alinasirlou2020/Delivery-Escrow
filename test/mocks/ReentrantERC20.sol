@@ -2,10 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-
-interface IReentryTarget {
-    function releaseFunds(uint256 orderId) external;
-}
+import {IReentryTarget} from "./IReentryTarget.sol";
 
 /**
  * @notice ERC-20 whose `transfer` callback tries to re-enter `releaseFunds` on a
@@ -24,6 +21,7 @@ contract ReentrantERC20 is ERC20 {
     }
 
     function setAttack(address _target, uint256 _orderId, bool _attack) external {
+        require(_target != address(0), "zero target");
         target = _target;
         reentryOrderId = _orderId;
         attack = _attack;

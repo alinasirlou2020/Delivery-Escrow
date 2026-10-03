@@ -13,12 +13,12 @@ contract DeliveryEscrowTest is Test {
     MockDeliveryOracle internal oracleContract;
     MockERC20 internal token;
 
-    address internal admin = makeAddr("admin");
-    address internal oracleOperator = makeAddr("oracleOperator");
-    address internal arbiter = makeAddr("arbiter");
-    address internal buyer = makeAddr("buyer");
-    address internal seller = makeAddr("seller");
-    address internal stranger = makeAddr("stranger");
+    address internal admin;
+    address internal oracleOperator;
+    address internal arbiter;
+    address internal buyer;
+    address internal seller;
+    address internal stranger;
 
     address internal attestationSigner;
     uint256 internal attestationSignerKey;
@@ -28,8 +28,15 @@ contract DeliveryEscrowTest is Test {
     uint256 internal constant DISPUTE_WINDOW = 2 days;
     uint256 internal constant RETURN_WINDOW = 10 days;
     uint256 internal constant AMOUNT = 100 ether;
+    uint256 internal constant BUYER_INITIAL_BALANCE = 1_000 ether;
 
     function setUp() public {
+        admin = makeAddr("admin");
+        oracleOperator = makeAddr("oracleOperator");
+        arbiter = makeAddr("arbiter");
+        buyer = makeAddr("buyer");
+        seller = makeAddr("seller");
+        stranger = makeAddr("stranger");
         (attestationSigner, attestationSignerKey) = makeAddrAndKey("attestationSigner");
 
         vm.startPrank(admin);
@@ -50,9 +57,9 @@ contract DeliveryEscrowTest is Test {
         escrow.setDeliveryOracle(address(oracleContract));
         vm.stopPrank();
 
-        token.mint(buyer, 1_000 ether);
+        token.mint(buyer, BUYER_INITIAL_BALANCE);
         vm.prank(buyer);
-        token.approve(address(escrow), type(uint256).max);
+        require(token.approve(address(escrow), type(uint256).max), "approve failed");
     }
 
     // ------------------------------------------------------------
@@ -205,10 +212,10 @@ contract DeliveryEscrowTest is Test {
 
     function test_createOrder_success() public {
         uint256 orderId = _createOrderNoOtp();
-        (address o_buyer, address o_seller, uint256 amount,,,,,,,,,,, IDeliveryEscrow.State state) =
+        (address oBuyer, address oSeller, uint256 amount,,,,,,,,,,, IDeliveryEscrow.State state) =
             escrow.orders(orderId);
-        assertEq(o_buyer, buyer);
-        assertEq(o_seller, seller);
+        assertEq(oBuyer, buyer);
+        assertEq(oSeller, seller);
         assertEq(amount, AMOUNT);
         assertEq(uint8(state), uint8(IDeliveryEscrow.State.Created));
     }
@@ -925,9 +932,9 @@ contract DeliveryEscrowTest is Test {
         vm.prank(admin);
         evilEscrow.setDeliveryOracle(address(evilOracle));
 
-        evilToken.mint(buyer, 1_000 ether);
+        evilToken.mint(buyer, BUYER_INITIAL_BALANCE);
         vm.prank(buyer);
-        evilToken.approve(address(evilEscrow), type(uint256).max);
+        require(evilToken.approve(address(evilEscrow), type(uint256).max), "approve failed");
 
         vm.prank(seller);
         uint256 orderId =

@@ -20,6 +20,14 @@ import {IDeliveryEscrow} from "./IDeliveryEscrow.sol";
  * `DeliveryEscrow.deliveryOracle` must be set to the address of a deployed
  * instance of this contract (or any future, more sophisticated replacement that
  * implements the same forwarding pattern).
+ *
+ * @dev Each `Forwarded*` event is emitted *before* the corresponding call to
+ * `ESCROW`, not after. The event itself only ever carries this call's own
+ * static inputs (never anything read back from `ESCROW`), so there is nothing
+ * for a reentrant call to reorder or fabricate, and if the forwarded call
+ * reverts, the whole transaction — including the event — reverts with it.
+ * Emitting first simply avoids flagging a false "event-after-external-call"
+ * finding for a case with no actual log-integrity risk.
  */
 contract MockDeliveryOracle is Ownable {
     IDeliveryEscrow public immutable ESCROW;
@@ -35,8 +43,8 @@ contract MockDeliveryOracle is Ownable {
 
     /// @notice Simulates a drone dispatch / courier pickup event.
     function markOutForDelivery(uint256 orderId) external onlyOwner {
-        ESCROW.markOutForDelivery(orderId);
         emit ForwardedOutForDelivery(orderId);
+        ESCROW.markOutForDelivery(orderId);
     }
 
     /// @notice Forwards a pre-signed delivery attestation to the escrow. The
@@ -48,8 +56,8 @@ contract MockDeliveryOracle is Ownable {
         IDeliveryEscrow.DeliveryAttestation calldata attestation,
         bytes calldata signature
     ) external onlyOwner {
-        ESCROW.confirmDelivery(orderId, attestation, signature);
         emit ForwardedDeliveryConfirmation(orderId);
+        ESCROW.confirmDelivery(orderId, attestation, signature);
     }
 
     /// @notice Simulates the delivery system reporting an operational failure it
@@ -59,14 +67,14 @@ contract MockDeliveryOracle is Ownable {
         IDeliveryEscrow.IncidentType incidentType,
         string calldata evidenceRef
     ) external onlyOwner {
-        ESCROW.reportDeliveryIncident(orderId, incidentType, evidenceRef);
         emit ForwardedIncidentReport(orderId, incidentType);
+        ESCROW.reportDeliveryIncident(orderId, incidentType, evidenceRef);
     }
 
     /// @notice Simulates the delivery platform confirming a returned package has
     /// physically reached the seller.
     function confirmReturnReceived(uint256 orderId) external onlyOwner {
-        ESCROW.confirmReturnReceived(orderId);
         emit ForwardedReturnConfirmation(orderId);
+        ESCROW.confirmReturnReceived(orderId);
     }
 }

@@ -180,23 +180,34 @@ contract DeliveryEscrow is ReentrancyGuard, Ownable, EIP712, IDeliveryEscrow {
     // ============================================================
 
     modifier orderExists(uint256 orderId) {
-        if (orderId >= nextOrderId) revert OrderDoesNotExist();
+        _checkOrderExists(orderId);
         _;
     }
 
     modifier onlyState(uint256 orderId, State expected) {
-        if (orders[orderId].state != expected) revert InvalidState();
+        _checkOnlyState(orderId, expected);
         _;
     }
 
     modifier onlyDeliveryOracle() {
-        if (msg.sender != deliveryOracle) revert NotDeliveryOracle();
+        _checkOnlyDeliveryOracle();
         _;
     }
 
-    modifier onlyArbiter() {
-        if (msg.sender != arbiter) revert NotArbiter();
-        _;
+    // Note: no `onlyArbiter` modifier — it would only ever be used once (on
+    // `resolveDispute`), so the access check is inlined there directly instead
+    // (see the forge-lint `modifier-used-only-once` rule).
+
+    function _checkOrderExists(uint256 orderId) internal view {
+        if (orderId >= nextOrderId) revert OrderDoesNotExist();
+    }
+
+    function _checkOnlyState(uint256 orderId, State expected) internal view {
+        if (orders[orderId].state != expected) revert InvalidState();
+    }
+
+    function _checkOnlyDeliveryOracle() internal view {
+        if (msg.sender != deliveryOracle) revert NotDeliveryOracle();
     }
 
     // ============================================================
@@ -239,21 +250,24 @@ contract DeliveryEscrow is ReentrancyGuard, Ownable, EIP712, IDeliveryEscrow {
     function setDeliveryOracle(address newOracle) external onlyOwner {
         if (newOracle == address(0)) revert InvalidZeroAddress();
         if (newOracle == arbiter) revert BuyerSellerSame();
-        emit DeliveryOracleUpdated(deliveryOracle, newOracle);
+        address oldOracle = deliveryOracle;
         deliveryOracle = newOracle;
+        emit DeliveryOracleUpdated(oldOracle, newOracle);
     }
 
     function setAttestationSigner(address newSigner) external onlyOwner {
         if (newSigner == address(0)) revert InvalidZeroAddress();
-        emit AttestationSignerUpdated(attestationSigner, newSigner);
+        address oldSigner = attestationSigner;
         attestationSigner = newSigner;
+        emit AttestationSignerUpdated(oldSigner, newSigner);
     }
 
     function setArbiter(address newArbiter) external onlyOwner {
         if (newArbiter == address(0)) revert InvalidZeroAddress();
         if (newArbiter == deliveryOracle) revert BuyerSellerSame();
-        emit ArbiterUpdated(arbiter, newArbiter);
+        address oldArbiter = arbiter;
         arbiter = newArbiter;
+        emit ArbiterUpdated(oldArbiter, newArbiter);
     }
 
     // ============================================================
@@ -620,8 +634,9 @@ contract DeliveryEscrow is ReentrancyGuard, Ownable, EIP712, IDeliveryEscrow {
         nonReentrant
         orderExists(orderId)
         onlyState(orderId, State.Disputed)
-        onlyArbiter
     {
+        if (msg.sender != arbiter) revert NotArbiter();
+
         Order storage o = orders[orderId];
         _markLatestIncidentResolved(orderId);
 
