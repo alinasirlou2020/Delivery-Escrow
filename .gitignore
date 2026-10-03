@@ -19,4 +19,5 @@ docs/
 .env.*
 !.env.example
 
-.md
+DeliveryEscrow — Project Specification & Architecture.md
+Final Delivery Architecture Specification for DeliveryEscrow.md
