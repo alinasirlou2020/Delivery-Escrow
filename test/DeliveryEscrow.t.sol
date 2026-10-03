@@ -357,7 +357,7 @@ contract DeliveryEscrowTest is Test {
         uint256 orderId = _createOrderNoOtp();
         _fund(orderId);
         _ship(orderId);
-        
+
         // forge-lint: disable-next-line(unused-return)
         (,,, string memory shipmentId,,,,,,,,,,) = escrow.orders(orderId);
         IDeliveryEscrow.DeliveryAttestation memory a = IDeliveryEscrow.DeliveryAttestation({
@@ -667,9 +667,12 @@ contract DeliveryEscrowTest is Test {
         );
         assertEq(uint8(_orderState(orderId)), uint8(IDeliveryEscrow.State.Disputed));
         assertEq(escrow.incidentCount(orderId), 1);
-        (IDeliveryEscrow.IncidentType incidentType, address reportedBy,,, bool resolved) =
-        // forge-lint: disable-next-line(unused-return)
-            escrow.orderIncidents(orderId, 0);
+        (
+            IDeliveryEscrow.IncidentType incidentType,
+            address reportedBy,,,
+            bool resolved
+            // forge-lint: disable-next-line(unused-return)
+        ) = escrow.orderIncidents(orderId, 0);
         assertEq(uint8(incidentType), uint8(IDeliveryEscrow.IncidentType.DeliveryFailed));
         assertEq(reportedBy, address(oracleContract));
         assertFalse(resolved);
