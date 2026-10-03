@@ -103,6 +103,7 @@ contract DeliveryEscrowTest is Test {
         view
         returns (IDeliveryEscrow.DeliveryAttestation memory attestation, bytes memory signature)
     {
+        // forge-lint: disable-next-line(unused-return)
         (,,, string memory shipmentId,,,,,,, uint256 deliveryNonce,,,) = escrow.orders(orderId);
         attestation = IDeliveryEscrow.DeliveryAttestation({
             orderId: orderId,
@@ -212,8 +213,13 @@ contract DeliveryEscrowTest is Test {
 
     function test_createOrder_success() public {
         uint256 orderId = _createOrderNoOtp();
-        (address oBuyer, address oSeller, uint256 amount,,,,,,,,,,, IDeliveryEscrow.State state) =
-            escrow.orders(orderId);
+        (
+            address oBuyer,
+            address oSeller,
+            uint256 amount,,,,,,,,,,,
+            IDeliveryEscrow.State state
+            // forge-lint: disable-next-line(unused-return)
+        ) = escrow.orders(orderId);
         assertEq(oBuyer, buyer);
         assertEq(oSeller, seller);
         assertEq(amount, AMOUNT);
@@ -223,12 +229,14 @@ contract DeliveryEscrowTest is Test {
     function test_createOrder_revertsOnZeroAddresses() public {
         vm.prank(seller);
         vm.expectRevert(DeliveryEscrow.InvalidZeroAddress.selector);
+        // forge-lint: disable-next-line(unused-return)
         escrow.createOrder(address(0), buyer, AMOUNT, IDeliveryEscrow.DeliveryMethod.DRONE, bytes32(0), "");
     }
 
     function test_createOrder_revertsOnSameBuyerSeller() public {
         vm.prank(seller);
         vm.expectRevert(DeliveryEscrow.BuyerSellerSame.selector);
+        // forge-lint: disable-next-line(unused-return)
         escrow.createOrder(seller, seller, AMOUNT, IDeliveryEscrow.DeliveryMethod.DRONE, bytes32(0), "");
     }
 
@@ -321,8 +329,10 @@ contract DeliveryEscrowTest is Test {
         _fund(orderId);
         _ship(orderId);
 
+        // forge-lint: disable-next-line(unused-return)
         (address wrongSigner, uint256 wrongKey) = makeAddrAndKey("notTheRealSigner");
         wrongSigner; // silence unused warning in some tooling
+        // forge-lint: disable-next-line(unused-return)
         (,,, string memory shipmentId,,,,,,, uint256 nonce,,,) = escrow.orders(orderId);
         IDeliveryEscrow.DeliveryAttestation memory a = IDeliveryEscrow.DeliveryAttestation({
             orderId: orderId,
@@ -347,7 +357,8 @@ contract DeliveryEscrowTest is Test {
         uint256 orderId = _createOrderNoOtp();
         _fund(orderId);
         _ship(orderId);
-
+        
+        // forge-lint: disable-next-line(unused-return)
         (,,, string memory shipmentId,,,,,,,,,,) = escrow.orders(orderId);
         IDeliveryEscrow.DeliveryAttestation memory a = IDeliveryEscrow.DeliveryAttestation({
             orderId: orderId,
@@ -654,10 +665,10 @@ contract DeliveryEscrowTest is Test {
         oracleContract.reportDeliveryIncident(
             orderId, IDeliveryEscrow.IncidentType.DeliveryFailed, "drone-crash-log-hash"
         );
-
         assertEq(uint8(_orderState(orderId)), uint8(IDeliveryEscrow.State.Disputed));
         assertEq(escrow.incidentCount(orderId), 1);
         (IDeliveryEscrow.IncidentType incidentType, address reportedBy,,, bool resolved) =
+        // forge-lint: disable-next-line(unused-return)
             escrow.orderIncidents(orderId, 0);
         assertEq(uint8(incidentType), uint8(IDeliveryEscrow.IncidentType.DeliveryFailed));
         assertEq(reportedBy, address(oracleContract));
